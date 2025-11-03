@@ -1,0 +1,70 @@
+# Ollama for Jetson Orin Nano (ARM64)
+# Using Ubuntu base and host CUDA installation via NVIDIA runtime
+# Compatible with JetPack 36.4.7
+
+FROM ubuntu:22.04
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive
+ENV OLLAMA_HOST=0.0.0.0:11434
+
+# CUDA will be mounted from host via NVIDIA runtime
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=${CUDA_HOME}/bin:${PATH}
+ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    curl \
+    git \
+    wget \
+    ca-certificates \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Go (required for Ollama build)
+ENV GO_VERSION=1.22.2
+RUN wget https://go.dev/dl/go${GO_VERSION}.linux-arm64.tar.gz && \
+    tar -C /usr/local -xzf go${GO_VERSION}.linux-arm64.tar.gz && \
+    rm go${GO_VERSION}.linux-arm64.tar.gz
+
+ENV PATH=/usr/local/go/bin:${PATH}
+ENV GOPATH=/go
+ENV PATH=${GOPATH}/bin:${PATH}
+
+# Create working directory
+WORKDIR /build
+
+# Clone Ollama repository
+RUN git clone https://github.com/ollama/ollama.git && \
+    cd ollama
+
+WORKDIR /build/ollama
+
+# Build Ollama with CUDA support for ARM64
+# Jetson Orin Nano uses compute capability 8.7 (Ampere)
+ENV CUDA_ARCHITECTURES="87"
+ENV CGO_ENABLED=1
+ENV GOARCH=arm64
+
+# Generate llama.cpp build files (this downloads/builds dependencies)
+RUN go generate ./...
+
+# Build Ollama binary with CUDA support
+RUN go build -tags cuda -o /usr/local/bin/ollama .
+
+# Create Ollama data directory
+RUN mkdir -p /root/.ollama
+
+# Expose Ollama API port
+EXPOSE 11434
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:11434/api/tags || exit 1
+
+# Set entrypoint
+ENTRYPOINT ["/usr/local/bin/ollama"]
+CMD ["serve"]
